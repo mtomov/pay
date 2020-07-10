@@ -27,6 +27,7 @@ module Pay
       attribute :plan, :string
       attribute :quantity, :integer
       attribute :card_token, :string
+      attribute :connected_account_id, :string
     end
 
     def processor=(value)

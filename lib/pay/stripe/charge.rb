@@ -12,16 +12,16 @@ module Pay
       end
 
       def stripe_charge
-        ::Stripe::Charge.retrieve(processor_id)
+        ::Stripe::Charge.retrieve(processor_id, {stripe_account: owner.connected_account_id})
       rescue ::Stripe::StripeError => e
         raise Pay::Stripe::Error, e
       end
 
       def stripe_refund!(amount_to_refund)
-        ::Stripe::Refund.create(
+        ::Stripe::Refund.create({
           charge: processor_id,
           amount: amount_to_refund
-        )
+        }, {stripe_account: owner.connected_account_id})
 
         update(amount_refunded: amount_to_refund)
       rescue ::Stripe::StripeError => e

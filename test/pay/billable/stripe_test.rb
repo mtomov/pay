@@ -7,12 +7,29 @@ class Pay::Stripe::Billable::Test < ActiveSupport::TestCase
 
     @customer = ::Stripe::Customer.create(email: @billable.email)
 
+    @connected_account = Stripe::Account.create({
+      country: "US",
+      type: "custom",
+      requested_capabilities: ["card_payments", "transfers"]
+    })
+
+    @connected_customer = ::Stripe::Customer.create(
+      {email: @billable.email},
+      {stripe_account: @connected_account.id}
+    )
+
     @plan = ::Stripe::Plan.retrieve("small-monthly")
   end
 
   test "getting a stripe customer with a processor id" do
     @billable.processor_id = @customer.id
     assert_equal @billable.stripe_customer, @customer
+  end
+
+  test "getting a connected stripe customer with a processor id" do
+    @billable.connected_account_id = @connected_account.id
+    @billable.processor_id = @connected_customer.id
+    assert_equal @billable.stripe_customer, @connected_customer
   end
 
   test "getting a stripe customer without a processor id" do
@@ -175,7 +192,9 @@ class Pay::Stripe::Billable::Test < ActiveSupport::TestCase
   end
 
   test "stripe trial period options" do
-    travel_to(VCR.current_cassette.originally_recorded_at || Time.current) do
+    current = Time.current
+    destination = ENV["SKIP_VCR"] ? current : (VCR.current_cassette.originally_recorded_at || current)
+    travel_to(destination) do
       @billable.card_token = payment_method.id
       subscription = @billable.subscribe(plan: "small-monthly", trial_period_days: 15)
       assert_equal "trialing", subscription.status
