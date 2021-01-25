@@ -163,6 +163,16 @@ module Pay
         stripe_sub.trial_end.present? ? Time.at(stripe_sub.trial_end) : nil
       end
 
+      def stripe_current_period_end_date(stripe_sub)
+        # Times in Stripe are returned in UTC
+        stripe_sub.current_period_end.present? ? Time.at(stripe_sub.current_period_end) : nil
+      end
+
+      def stripe_current_period_start_date(stripe_sub)
+        # Times in Stripe are returned in UTC
+        stripe_sub.current_period_start.present? ? Time.at(stripe_sub.current_period_start) : nil
+      end
+
       # Save the card to the database as the user's current card
       def update_stripe_card_on_file(card)
         update!(

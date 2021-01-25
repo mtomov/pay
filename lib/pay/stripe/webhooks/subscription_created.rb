@@ -31,7 +31,8 @@ module Pay
 
           # User wasn't on trial, so subscription ends at period end
           elsif object.cancel_at_period_end
-            Time.at(object.current_period_end)
+            subscription.current_period_starts_at = Time.at(object.current_period_start)
+            subscription.current_period_ends_at = Time.at(object.current_period_end)
 
             # Subscription isn't marked to cancel at period end
           end
