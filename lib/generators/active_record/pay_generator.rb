@@ -40,7 +40,6 @@ module ActiveRecord
       t.string :card_last4
       t.string :card_exp_month
       t.string :card_exp_year
-      t.string :connected_account_id
       t.text :extra_billing_info
 RUBY
       end

@@ -12,7 +12,7 @@ module Pay
       # Returns Stripe::Customer
       def stripe_customer
         if processor_id?
-          retrieve_customer_with_marketplace
+          ::Stripe::Customer.retrieve(processor_id, default_opts)
         else
           create_stripe_customer
         end
@@ -20,17 +20,11 @@ module Pay
         raise Pay::Stripe::Error, e
       end
 
-      def retrieve_customer_with_marketplace
-        ::Stripe::Customer.retrieve(processor_id, {
-          stripe_account: connected_account_id
-        })
-      end
-
       def create_setup_intent
         ::Stripe::SetupIntent.create({
           customer: processor_id,
           usage: :off_session
-        }, {stripe_account: connected_account_id})
+        }, default_opts)
       end
 
       # Handles Billable#charge
@@ -47,7 +41,7 @@ module Pay
           payment_method: customer.invoice_settings.default_payment_method
         }.merge(options)
 
-        payment_intent = ::Stripe::PaymentIntent.create(args, {stripe_account: connected_account_id})
+        payment_intent = ::Stripe::PaymentIntent.create(args, default_opts)
         Pay::Payment.new(payment_intent).validate
 
         # Create a new charge object
@@ -61,18 +55,18 @@ module Pay
       # Returns Pay::Subscription
       def create_stripe_subscription(name, plan, options = {})
         quantity = options.delete(:quantity) || 1
-        opts = {
+        args = {
           expand: ["pending_setup_intent", "latest_invoice.payment_intent"],
           items: [plan: plan, quantity: quantity],
           off_session: true
         }.merge(options)
 
         # Inherit trial from plan unless trial override was specified
-        opts[:trial_from_plan] = true unless opts[:trial_period_days]
+        args[:trial_from_plan] = true unless args[:trial_period_days]
 
-        opts[:customer] = stripe_customer.id
+        args[:customer] = stripe_customer.id
 
-        stripe_sub = ::Stripe::Subscription.create(opts, {stripe_account: connected_account_id})
+        stripe_sub = ::Stripe::Subscription.create(args, default_opts)
         subscription = create_subscription(stripe_sub, "stripe", name, plan, status: stripe_sub.status, quantity: quantity)
 
         # No trial, card requires SCA
@@ -93,12 +87,13 @@ module Pay
       #
       # Returns true if successful
       def update_stripe_card(payment_method_id)
+        raise "Cannot update a card on a connected account" if connected_account_id.present?
         customer = stripe_customer
 
         return true if payment_method_id == customer.invoice_settings.default_payment_method
 
-        payment_method = ::Stripe::PaymentMethod.attach(payment_method_id, {customer: customer.id}, {stripe_account: connected_account_id})
-        ::Stripe::Customer.update(customer.id, {invoice_settings: {default_payment_method: payment_method.id}}, {stripe_account: connected_account_id})
+        payment_method = ::Stripe::PaymentMethod.attach(payment_method_id, {customer: customer.id}, default_opts)
+        ::Stripe::Customer.update(customer.id, {invoice_settings: {default_payment_method: payment_method.id}}, default_opts)
 
         update_stripe_card_on_file(payment_method.card)
         true
@@ -114,25 +109,29 @@ module Pay
       end
 
       def stripe_subscription(subscription_id, options = {})
-        ::Stripe::Subscription.retrieve(options.merge(id: subscription_id), {stripe_account: connected_account_id})
+        ::Stripe::Subscription.retrieve(options.merge(id: subscription_id), default_opts)
       end
 
       def stripe_invoice!(options = {})
         return unless processor_id?
-        ::Stripe::Invoice.create(options.merge(customer: processor_id), {stripe_account: connected_account_id}).pay
+        ::Stripe::Invoice.create(options.merge(customer: processor_id), default_opts).pay
       end
 
       def stripe_upcoming_invoice
-        ::Stripe::Invoice.upcoming({customer: processor_id}, {stripe_account: connected_account_id})
+        ::Stripe::Invoice.upcoming({customer: processor_id}, default_opts)
       end
 
       # Used by webhooks when the customer or source changes
       def sync_card_from_stripe
+        # for now, just don't do anything if we're on the AccountUser model,
+        # as we can't just update one card on one connected account
+        return if connected_account_id.present?
+
         stripe_cust = stripe_customer
         default_payment_method_id = stripe_cust.invoice_settings.default_payment_method
 
         if default_payment_method_id.present?
-          payment_method = payment_method_with_marketplace(default_payment_method_id)
+          payment_method = ::Stripe::PaymentMethod.retrieve(default_payment_method_id)
           update(
             card_type: payment_method.card.brand,
             card_last4: payment_method.card.last4,
@@ -146,27 +145,38 @@ module Pay
         end
       end
 
-      def payment_method_with_marketplace(payment_method_id)
-        ::Stripe::PaymentMethod.retrieve(
-          payment_method_id,
-          {stripe_account: connected_account_id}
-        )
-      end
-
       private
 
-      def create_stripe_customer
-        customer = ::Stripe::Customer.create({email: email, name: customer_name}, {stripe_account: connected_account_id})
-        update(processor: "stripe", processor_id: customer.id)
+      def default_opts
+        opts = {}
+        opts[:stripe_account] = connected_account_id if connected_account_id
+        opts
+      end
 
-        # Update the user's card on file if a token was passed in
-        if card_token.present?
-          payment_method = ::Stripe::PaymentMethod.attach(card_token, {customer: customer.id}, {stripe_account: connected_account_id})
+      def create_stripe_customer
+        if connected_account_id
+          # take the cust_id from our platform, which hopefully exists at this point
+          raise "Customer doesn't exist on User" unless user.processor_id
+          platform_customer_id = user.processor_id
+          # See https://stripe.com/docs/connect/cloning-saved-payment-methods for more details
+          payment_method = ::Stripe::PaymentMethod.create({customer: platform_customer_id, payment_method: user.customer.invoice_settings.default_payment_method}, default_opts)
+          customer = ::Stripe::Customer.create({email: email, name: customer_name, payment_method: payment_method.id}, default_opts)
           customer.invoice_settings.default_payment_method = payment_method.id
           customer.save
+        else
+          customer = ::Stripe::Customer.create({email: email, name: customer_name}, default_opts)
 
-          update_stripe_card_on_file ::Stripe::PaymentMethod.retrieve(card_token, {stripe_account: connected_account_id}).card
+          # Update the user's card on file if a token was passed in
+          if card_token.present?
+            payment_method = ::Stripe::PaymentMethod.attach(card_token, {customer: customer.id}, default_opts)
+            customer.invoice_settings.default_payment_method = payment_method.id
+            customer.save
+
+            update_stripe_card_on_file ::Stripe::PaymentMethod.retrieve(card_token, default_opts).card
+          end
         end
+
+        update(processor: "stripe", processor_id: customer.id)
 
         customer
       end

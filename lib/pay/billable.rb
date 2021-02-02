@@ -27,7 +27,9 @@ module Pay
       attribute :plan, :string
       attribute :quantity, :integer
       attribute :card_token, :string
-      attribute :connected_account_id, :string
+
+      # so to have a default value of nil
+      attribute :connected_account_id, :integer
     end
 
     def processor=(value)
