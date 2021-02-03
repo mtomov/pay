@@ -87,7 +87,6 @@ module Pay
       #
       # Returns true if successful
       def update_stripe_card(payment_method_id)
-        raise "Cannot update a card on a connected account" if connected_account_id.present?
         customer = stripe_customer
 
         return true if payment_method_id == customer.invoice_settings.default_payment_method
@@ -123,8 +122,8 @@ module Pay
 
       # Used by webhooks when the customer or source changes
       def sync_card_from_stripe
-        # for now, just don't do anything if we're on the AccountUser model,
-        # as we can't just update one card on one connected account
+        # we don't update cards on connected accounts as they
+        # are meant to be clones of the cards on the platform
         return if connected_account_id.present?
 
         stripe_cust = stripe_customer
@@ -154,26 +153,15 @@ module Pay
       end
 
       def create_stripe_customer
-        if connected_account_id
-          # take the cust_id from our platform, which hopefully exists at this point
-          raise "Customer doesn't exist on User" unless user.processor_id
-          platform_customer_id = user.processor_id
-          # See https://stripe.com/docs/connect/cloning-saved-payment-methods for more details
-          payment_method = ::Stripe::PaymentMethod.create({customer: platform_customer_id, payment_method: user.customer.invoice_settings.default_payment_method}, default_opts)
-          customer = ::Stripe::Customer.create({email: email, name: customer_name, payment_method: payment_method.id}, default_opts)
+        customer = ::Stripe::Customer.create({email: email, name: customer_name}, default_opts)
+
+        # Update the user's card on file if a token was passed in
+        if card_token.present?
+          payment_method = ::Stripe::PaymentMethod.attach(card_token, {customer: customer.id}, default_opts)
           customer.invoice_settings.default_payment_method = payment_method.id
           customer.save
-        else
-          customer = ::Stripe::Customer.create({email: email, name: customer_name}, default_opts)
 
-          # Update the user's card on file if a token was passed in
-          if card_token.present?
-            payment_method = ::Stripe::PaymentMethod.attach(card_token, {customer: customer.id}, default_opts)
-            customer.invoice_settings.default_payment_method = payment_method.id
-            customer.save
-
-            update_stripe_card_on_file ::Stripe::PaymentMethod.retrieve(card_token, default_opts).card
-          end
+          update_stripe_card_on_file ::Stripe::PaymentMethod.retrieve(card_token, default_opts).card
         end
 
         update(processor: "stripe", processor_id: customer.id)
@@ -198,6 +186,9 @@ module Pay
 
       # Save the card to the database as the user's current card
       def update_stripe_card_on_file(card)
+        # Not possible as we don't store cloned card details on connected accounts
+        return if connected_account_id.present?
+
         update!(
           card_type: card.brand.capitalize,
           card_last4: card.last4,

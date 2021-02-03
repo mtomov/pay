@@ -1,5 +1,5 @@
 module Pay
-  class ApplicationMailer < ActionMailer::Base
+  class ApplicationMailer < ::ApplicationMailer
     default from: Pay.support_email
     layout "mailer"
   end

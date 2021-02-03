@@ -61,7 +61,7 @@
 </div>
 
 <script>
-  window.stripe = Stripe('<%= Pay::Stripe.public_key %>');
+  window.stripe = Stripe('<%= Pay::Stripe.public_key %>', { stripeAccount: '<%= ActsAsTenant.current_tenant.stripe_account_id %>' });
   var app = new Vue({
     el: '#app',
     data: {
